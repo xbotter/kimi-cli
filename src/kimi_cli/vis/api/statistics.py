@@ -143,13 +143,27 @@ def _compute_statistics() -> dict[str, Any]:
     """Compute statistics by processing all session files in parallel."""
     sessions_root = get_share_dir() / "sessions"
     if not sessions_root.exists():
+        # Build empty daily_usage with 30 days
+        today = datetime.now(tz=UTC)
+        daily_usage: list[dict[str, Any]] = []
+        for i in range(29, -1, -1):
+            d = today - timedelta(days=i)
+            daily_usage.append(
+                {
+                    "date": d.strftime("%Y-%m-%d"),
+                    "sessions": 0,
+                    "turns": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                }
+            )
         return {
             "total_sessions": 0,
             "total_turns": 0,
             "total_tokens": {"input": 0, "output": 0},
             "total_duration_sec": 0,
             "tool_usage": [],
-            "daily_usage": [],
+            "daily_usage": daily_usage,
             "per_project": [],
         }
 
