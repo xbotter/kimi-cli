@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type AggregateStats, getAggregateStats } from "@/lib/api";
 
 /* ------------------------------------------------------------------ */
@@ -9,6 +9,10 @@ function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
+}
+
+function formatTokensM(n: number): string {
+  return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
 function formatDuration(sec: number): string {
@@ -31,26 +35,58 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Daily Usage Chart (SVG line chart)                                 */
+/*  Daily Usage Chart (Responsive SVG line chart with hover tooltip)   */
 /* ------------------------------------------------------------------ */
 
-const CHART_WIDTH = 600;
-const CHART_HEIGHT = 120;
-const CHART_PAD_X = 40;
-const CHART_PAD_TOP = 12;
-const CHART_PAD_BOTTOM = 24;
+const CHART_HEIGHT = 140;
+const CHART_PAD_X = 56;
+const CHART_PAD_TOP = 16;
+const CHART_PAD_BOTTOM = 32;
+
+interface TooltipState {
+  visible: boolean;
+  x: number;
+  y: number;
+  data: AggregateStats["daily_usage"][0] | null;
+}
 
 function DailyUsageChart({
   daily,
 }: {
   daily: AggregateStats["daily_usage"];
 }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [chartWidth, setChartWidth] = useState(600);
+  const [tooltip, setTooltip] = useState<TooltipState>({
+    visible: false,
+    x: 0,
+    y: 0,
+    data: null,
+  });
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    const updateWidth = () => {
+      if (containerRef.current) {
+        setChartWidth(containerRef.current.clientWidth);
+      }
+    };
+    updateWidth();
+    window.addEventListener("resize", updateWidth);
+    return () => window.removeEventListener("resize", updateWidth);
+  }, []);
+
   if (daily.length === 0) return null;
 
   const maxSessions = Math.max(1, ...daily.map((d) => d.sessions));
   const maxTurns = Math.max(1, ...daily.map((d) => d.turns));
+  const maxTokens = Math.max(
+    1,
+    ...daily.map((d) => d.input_tokens + d.output_tokens)
+  );
 
-  const innerW = CHART_WIDTH - CHART_PAD_X * 2;
+  const innerW = Math.max(0, chartWidth - CHART_PAD_X * 2);
   const innerH = CHART_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
 
   const toX = (i: number) =>
@@ -59,6 +95,8 @@ function DailyUsageChart({
     CHART_PAD_TOP + (1 - v / maxSessions) * innerH;
   const toYTurns = (v: number) =>
     CHART_PAD_TOP + (1 - v / maxTurns) * innerH;
+  const toYTokens = (v: number) =>
+    CHART_PAD_TOP + (1 - v / maxTokens) * innerH;
 
   // Sessions line
   const sessionsPath = daily
@@ -68,6 +106,11 @@ function DailyUsageChart({
   // Turns line
   const turnsPath = daily
     .map((d, i) => `${i === 0 ? "M" : "L"} ${toX(i)} ${toYTurns(d.turns)}`)
+    .join(" ");
+
+  // Tokens line (input + output)
+  const tokensPath = daily
+    .map((d, i) => `${i === 0 ? "M" : "L"} ${toX(i)} ${toYTokens(d.input_tokens + d.output_tokens)}`)
     .join(" ");
 
   // Sessions area fill
@@ -89,17 +132,92 @@ function DailyUsageChart({
     }
   }
 
+  // Calculate totals for summary
+  const totalInputTokens = daily.reduce((sum, d) => sum + d.input_tokens, 0);
+  const totalOutputTokens = daily.reduce((sum, d) => sum + d.output_tokens, 0);
+
+  // Tooltip width for boundary calculation
+  const TOOLTIP_WIDTH = 180;
+  const TOOLTIP_HEIGHT = 140;
+
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!svgRef.current || !containerRef.current) return;
+    
+    const rect = svgRef.current.getBoundingClientRect();
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    // Find nearest data point based on X position
+    if (x < CHART_PAD_X || x > chartWidth - CHART_PAD_X) {
+      setTooltip({ ...tooltip, visible: false });
+      setHoverIndex(null);
+      return;
+    }
+    
+    const relativeX = x - CHART_PAD_X;
+    const ratio = relativeX / innerW;
+    const index = Math.round(ratio * (daily.length - 1));
+    const clampedIndex = Math.max(0, Math.min(daily.length - 1, index));
+    
+    // Calculate tooltip position with boundary check
+    const dataX = containerRect.left + toX(clampedIndex);
+    let tooltipX = dataX;
+    const tooltipY = containerRect.top + CHART_PAD_TOP - 8;
+    
+    // Check if tooltip would overflow on the right
+    const viewportWidth = window.innerWidth;
+    if (tooltipX + TOOLTIP_WIDTH / 2 > viewportWidth - 16) {
+      // Align right edge with viewport minus padding
+      tooltipX = viewportWidth - TOOLTIP_WIDTH / 2 - 16;
+    } else if (tooltipX - TOOLTIP_WIDTH / 2 < 16) {
+      // Align left edge with viewport minus padding
+      tooltipX = TOOLTIP_WIDTH / 2 + 16;
+    }
+    
+    setHoverIndex(clampedIndex);
+    setTooltip({
+      visible: true,
+      x: tooltipX,
+      y: tooltipY,
+      data: daily[clampedIndex],
+    });
+  };
+
+  const handleMouseLeave = () => {
+    setTooltip({ ...tooltip, visible: false });
+    setHoverIndex(null);
+  };
+
   return (
-    <div className="rounded-lg border p-4">
-      <div className="flex items-center gap-2 mb-2">
+    <div className="rounded-lg border p-4" ref={containerRef}>
+      <div className="flex items-center justify-between mb-2">
         <span className="text-sm font-medium">Daily Usage (Last 30 Days)</span>
+        <div className="text-xs text-muted-foreground">
+          Tokens: {formatTokensM(totalInputTokens)} in / {formatTokensM(totalOutputTokens)} out
+        </div>
       </div>
 
       <svg
-        viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
-        className="w-full"
+        ref={svgRef}
+        width={chartWidth}
+        height={CHART_HEIGHT}
+        className="w-full cursor-crosshair"
         style={{ maxHeight: CHART_HEIGHT }}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
       >
+        {/* Grid lines */}
+        <line
+          x1={CHART_PAD_X}
+          y1={CHART_PAD_TOP + innerH * 0.5}
+          x2={chartWidth - CHART_PAD_X}
+          y2={CHART_PAD_TOP + innerH * 0.5}
+          className="stroke-border"
+          strokeWidth={0.5}
+          strokeDasharray="2 2"
+        />
+
         {/* Sessions area fill */}
         <path d={sessionsArea} className="fill-blue-500/10" />
 
@@ -120,11 +238,20 @@ function DailyUsageChart({
           strokeDasharray="4 2"
         />
 
-        {/* Y-axis labels */}
+        {/* Tokens line */}
+        <path
+          d={tokensPath}
+          className="stroke-purple-500"
+          strokeWidth={1.5}
+          fill="none"
+          strokeDasharray="2 2"
+        />
+
+        {/* Y-axis labels (left - sessions) */}
         <text
           x={CHART_PAD_X - 4}
           y={CHART_PAD_TOP + 4}
-          className="fill-muted-foreground"
+          className="fill-blue-500"
           fontSize={8}
           textAnchor="end"
         >
@@ -140,12 +267,23 @@ function DailyUsageChart({
           0
         </text>
 
+        {/* Y-axis labels (right - tokens in M) */}
+        <text
+          x={chartWidth - CHART_PAD_X + 4}
+          y={CHART_PAD_TOP + 4}
+          className="fill-purple-500"
+          fontSize={8}
+          textAnchor="start"
+        >
+          {(maxTokens / 1_000_000).toFixed(1)}M
+        </text>
+
         {/* X-axis date labels */}
         {labelIndices.map((idx) => (
           <text
             key={idx}
             x={toX(idx)}
-            y={CHART_HEIGHT - 4}
+            y={CHART_HEIGHT - 8}
             className="fill-muted-foreground"
             fontSize={8}
             textAnchor="middle"
@@ -166,19 +304,81 @@ function DailyUsageChart({
             />
           ) : null,
         )}
+
+        {/* Hover highlight line */}
+        {hoverIndex !== null && (
+          <line
+            x1={toX(hoverIndex)}
+            y1={CHART_PAD_TOP}
+            x2={toX(hoverIndex)}
+            y2={CHART_PAD_TOP + innerH}
+            className="stroke-muted-foreground/50"
+            strokeWidth={1}
+            strokeDasharray="3 2"
+          />
+        )}
       </svg>
 
       {/* Legend */}
-      <div className="flex items-center gap-4 mt-2">
+      <div className="flex items-center gap-4 mt-2 flex-wrap">
         <div className="flex items-center gap-1">
           <div className="w-3 h-0.5 bg-blue-500 rounded" />
           <span className="text-[10px] text-muted-foreground">Sessions</span>
         </div>
         <div className="flex items-center gap-1">
-          <div className="w-3 h-0.5 bg-green-500 rounded border-dashed" />
+          <div className="w-3 h-0.5 bg-green-500 rounded border-dashed" style={{ borderTop: '1px dashed rgb(34, 197, 94)' }} />
           <span className="text-[10px] text-muted-foreground">Turns</span>
         </div>
+        <div className="flex items-center gap-1">
+          <div className="w-3 h-0.5 bg-purple-500 rounded" style={{ borderTop: '1px dashed rgb(168, 85, 247)' }} />
+          <span className="text-[10px] text-muted-foreground">Tokens</span>
+        </div>
       </div>
+
+      {/* Tooltip */}
+      {tooltip.visible && tooltip.data && (
+        <div
+          className="fixed z-50 pointer-events-none bg-popover border rounded-lg shadow-lg p-3 text-xs min-w-[160px]"
+          style={{
+            left: tooltip.x,
+            top: tooltip.y,
+            transform: "translate(-50%, -100%)",
+          }}
+        >
+          <div className="font-medium text-foreground mb-1.5">
+            {tooltip.data.date}
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-muted-foreground flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-blue-500" />
+                Sessions
+              </span>
+              <span className="font-medium tabular-nums">{tooltip.data.sessions}</span>
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-muted-foreground flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-green-500" />
+                Turns
+              </span>
+              <span className="font-medium tabular-nums">{tooltip.data.turns}</span>
+            </div>
+            <div className="border-t my-1.5" />
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-muted-foreground flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-purple-500" />
+                Tokens
+              </span>
+              <span className="font-medium tabular-nums">
+                {formatTokensM(tooltip.data.input_tokens + tooltip.data.output_tokens)}
+              </span>
+            </div>
+            <div className="text-[10px] text-muted-foreground pl-3">
+              {formatTokens(tooltip.data.input_tokens)} in / {formatTokens(tooltip.data.output_tokens)} out
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -284,18 +484,20 @@ function ProjectTable({
         <thead>
           <tr className="border-b text-xs text-muted-foreground">
             <th className="text-left py-1.5 font-medium">Project</th>
-            <th className="text-right py-1.5 font-medium w-[80px]">Sessions</th>
-            <th className="text-right py-1.5 font-medium w-[80px]">Turns</th>
+            <th className="text-right py-1.5 font-medium w-[60px]">Sessions</th>
+            <th className="text-right py-1.5 font-medium w-[60px]">Turns</th>
+            <th className="text-right py-1.5 font-medium w-[80px]">Tokens</th>
           </tr>
         </thead>
         <tbody>
           {projects.map((p) => {
             const segments = p.work_dir.split("/");
             const shortName = segments[segments.length - 1] || p.work_dir;
+            const totalTokens = p.input_tokens + p.output_tokens;
             return (
               <tr key={p.work_dir} className="border-b last:border-b-0">
                 <td
-                  className="py-1.5 truncate max-w-[300px]"
+                  className="py-1.5 truncate max-w-[200px]"
                   title={p.work_dir}
                 >
                   {shortName}
@@ -304,6 +506,12 @@ function ProjectTable({
                   {p.sessions}
                 </td>
                 <td className="py-1.5 text-right tabular-nums">{p.turns}</td>
+                <td
+                  className="py-1.5 text-right tabular-nums text-xs"
+                  title={`${formatTokens(p.input_tokens)} in / ${formatTokens(p.output_tokens)} out`}
+                >
+                  {formatTokensM(totalTokens)}
+                </td>
               </tr>
             );
           })}

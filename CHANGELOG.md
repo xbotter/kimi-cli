@@ -11,6 +11,10 @@ Only write entries that are worth mentioning to users.
 
 ## Unreleased
 
+- Vis: Improve Daily Usage chart with responsive width and token usage display — chart now adapts to container width, shows token consumption as a purple trend line, and displays hover tooltips with detailed daily statistics
+- Vis: Add token consumption statistics to Top Projects table — each project now shows total tokens in millions (M) with detailed input/output breakdown on hover
+- Vis: Optimize statistics API performance with parallel file processing and 2-minute cache — reduces response time from ~3s to ~5ms for cached requests
+
 ## 1.22.0 (2026-03-13)
 
 - Shell: Collapse long pasted text into `[Pasted text #n]` placeholders — text pasted via `Ctrl-V` or bracketed paste that exceeds 300 characters or 3 lines is displayed as a compact placeholder token in the prompt buffer while the full content is sent to the model; the external editor (`Ctrl-O`) expands placeholders for editing and re-folds them on save

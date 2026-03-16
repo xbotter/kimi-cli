@@ -205,8 +205,8 @@ export interface AggregateStats {
   total_tokens: { input: number; output: number };
   total_duration_sec: number;
   tool_usage: { name: string; count: number; error_count: number }[];
-  daily_usage: { date: string; sessions: number; turns: number }[];
-  per_project: { work_dir: string; sessions: number; turns: number }[];
+  daily_usage: { date: string; sessions: number; turns: number; input_tokens: number; output_tokens: number }[];
+  per_project: { work_dir: string; sessions: number; turns: number; input_tokens: number; output_tokens: number }[];
 }
 
 export interface VisCapabilities {
